@@ -55,13 +55,22 @@ Secara garis besar, pengembangan sistem ini terbagi menjadi dua tahap utama, yai
 ## Cara Menjalankan API
 
 ### Prasyarat
-Pastikan **Python 3.10** atau versi yang lebih baru telah terpasang pada sistem Anda, kemudian pasang pustaka yang dibutuhkan:
+Pastikan **Python 3.10** atau versi yang lebih baru telah terpasang pada sistem Anda, kemudian pasang pustaka yang dibutuhkan menggunakan `pip`:
 
 ```bash
 pip install fastapi uvicorn ultralytics pillow python-multipart
 ```
 
-Pastikan pula berkas bobot model `YOLOv11n_Class Weight.pt` berada di dalam direktori `api/` sejajar dengan `main.py`.
+**Alternatif menggunakan Conda:**
+Apabila Anda menggunakan Conda, buat dan aktifkan lingkungan virtual terlebih dahulu sebelum memasang dependensi:
+
+```bash
+conda create -n poultry-yolo python=3.10 -y
+conda activate poultry-yolo
+pip install fastapi uvicorn ultralytics pillow python-multipart
+```
+
+Pastikan berkas bobot model `YOLOv11n_Class Weight.pt` berada di dalam direktori `api/` sejajar dengan `main.py`.
 
 ### Menjalankan Server Lokal
 Jalankan perintah berikut dari direktori utama (*root*) proyek:
