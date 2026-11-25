@@ -1,15 +1,23 @@
 from contextlib import asynccontextmanager
-import io
 import os
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from typing import BinaryIO
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from PIL import Image
 from ultralytics import YOLO
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "YOLOv11n_Class Weight.pt")
+MODEL_NAME = "YOLOv11n_Class Weight.pt"
+MODEL_PATH = os.path.join(BASE_DIR, MODEL_NAME)
 
-ml_models = {}  
+VALIDATION_MESSAGES = {
+    "file": "Input tidak valid. Field 'file' wajib diisi dengan file gambar (JPG/PNG).",
+    "conf": "Parameter 'conf' tidak valid. Harap masukkan nilai angka antara 0.0 dan 1.0 (contoh: 0.4).",
+}
+
+ml_models: dict[str, YOLO] = {}
 
 
 @asynccontextmanager
@@ -24,7 +32,6 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Poultry Disease Detection API",
     description="API Deteksi Penyakit Unggas Berbasis Citra Feses Menggunakan YOLOv11",
-    version="1.0.0",
     lifespan=lifespan,
 )
 
@@ -36,40 +43,55 @@ app.add_middleware(
 )
 
 
-def preprocess_image(image_bytes: bytes) -> Image.Image:
-    """Mengonversi bytes menjadi citra PIL RGB 3-channel."""
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Menyeragamkan respons error validasi request FastAPI ke format Bahasa Indonesia."""
+    for err in exc.errors():
+        for field, message in VALIDATION_MESSAGES.items():
+            if field in err.get("loc", ()):
+                return JSONResponse(status_code=422, content={"detail": message})
+
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Permintaan tidak valid. Periksa kembali parameter dan body request."},
+    )
+
+
+def preprocess_image(file_obj: BinaryIO) -> Image.Image:
+    """Membaca stream gambar dan mengonversinya menjadi citra PIL RGB 3-channel."""
     try:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        return image
+        with Image.open(file_obj) as image:
+            return image.convert("RGB")
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Gagal memproses file gambar: {exc}"
-        )
+        ) from exc
 
 
 @app.get("/")
 def health_check():
+    """Mengecek status server dan informasi model yang sedang aktif."""
     return {
         "status": "online",
-        "model": "poultry_disease_detection_YOLOv11.pt",
+        "model": MODEL_NAME,
         "classes": ml_models["yolo"].names,
     }
 
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...), conf: float = 0.4):
-    # 1. Terima & Validasi Input
+def predict(
+    file: UploadFile = File(...),
+    conf: float = Query(0.4, ge=0.0, le=1.0),
+):
+    """Menjalankan validasi, preprocessing, inferensi YOLO, dan pemformatan hasil JSON."""
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=400,
             detail="Input tidak valid. Harap unggah file gambar (JPG/PNG).",
         )
 
-    # 2. Preprocessing Input
-    image_bytes = await file.read()
-    processed_image = preprocess_image(image_bytes)
+    processed_image = preprocess_image(file.file)
 
-    # 3. Inference Model
     model = ml_models["yolo"]
     results = model.predict(
         source=processed_image,
@@ -78,16 +100,18 @@ async def predict(file: UploadFile = File(...), conf: float = 0.4):
         verbose=False,
     )
 
-    # 4. Formatting Output Prediksi
-    detections = []
-    for box in results[0].boxes:
-        class_id = int(box.cls[0])
-        detections.append({
-            "class_id": class_id,
-            "class_name": model.names[class_id],
-            "confidence": round(float(box.conf[0]), 4),
-            "bbox_xyxy": [round(float(coord), 2) for coord in box.xyxy[0]],
-        })
+    boxes = results[0].boxes
+    detections = [
+        {
+            "class_id": int(cls_id),
+            "class_name": model.names[int(cls_id)],
+            "confidence": round(score, 4),
+            "bbox_xyxy": [round(coord, 2) for coord in coords],
+        }
+        for cls_id, score, coords in zip(
+            boxes.cls.tolist(), boxes.conf.tolist(), boxes.xyxy.tolist()
+        )
+    ]
 
     return {
         "status": "success",
